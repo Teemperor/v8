@@ -15,6 +15,73 @@
 #include "src/objects/scope-info.h"
 #include "src/zone/zone.h"
 
+#include <cstdio>
+#include <cstdlib>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/un.h>
+
+#include <fstream>
+#include <string>
+#include <iostream>
+
+#include <execinfo.h>
+
+std::string sendAndReceiveMsg(v8::internal::Isolate *iso, std::string msg) {
+  auto address = getenv("JSFLOW_REWRITER");
+  if (address == nullptr)
+    return msg;
+
+  sockaddr_un server_sock = {};
+
+  int socket_fd = socket(PF_UNIX, SOCK_STREAM, 0);
+  if (socket_fd < 0) {
+    perror("client: socket");
+    return msg;
+  }
+
+  server_sock.sun_family = PF_UNIX;
+  strcpy(server_sock.sun_path, address);
+
+  socklen_t len = (socklen_t)(sizeof(server_sock.sun_family) + strlen(server_sock.sun_path));
+
+  if (connect(socket_fd, reinterpret_cast<sockaddr*>(&server_sock), len) < 0) {
+    close(socket_fd);
+    return msg;
+  }
+
+  FILE *fp = fdopen(socket_fd, "r");
+
+  std::ostringstream oss;
+  oss << (void*)iso;
+  std::string uid(oss.str());
+
+  msg = uid + " " + msg;
+
+  while (true) {
+    auto bytes_send = send(socket_fd, msg.data(), msg.size() + 1U, 0);
+    if (bytes_send <= -1) {
+      std::cerr << "Failed to send message " << std::endl;
+      return msg;
+    }
+    if ((size_t)bytes_send == msg.size() + 1U)
+      break;
+    msg = msg.substr(bytes_send);
+  }
+
+  std::string result;
+  int c;
+  while ((c = fgetc(fp)) != EOF) {
+    if (c == '\0')
+      break;
+    result.push_back((char)c);
+  }
+
+  close(socket_fd);
+  return result;
+}
+
 namespace v8 {
 namespace internal {
 
@@ -150,9 +217,20 @@ ParseInfo::~ParseInfo() = default;
 
 DeclarationScope* ParseInfo::scope() const { return literal()->scope(); }
 
-Handle<Script> ParseInfo::CreateScript(Isolate* isolate, Handle<String> source,
+Handle<Script> ParseInfo::CreateScript(Isolate* isolate, Handle<String> source2,
                                        ScriptOriginOptions origin_options,
                                        NativesFlag natives) {
+
+  std::string s = source2->ToCString().get();
+  s = isolate->parsing_internal ? s : sendAndReceiveMsg(isolate, s);
+
+  v8::internal::Factory* factory = isolate->factory();
+
+  Handle<String> source =
+      factory->NewStringFromOneByte(
+          v8::internal::Vector<const uint8_t>((const uint8_t*)s.data(),
+                                              static_cast<size_t>(s.size()))).ToHandleChecked();
+
   // Create a script object describing the script to be compiled.
   Handle<Script> script;
   if (script_id_ == -1) {

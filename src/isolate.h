@@ -1730,6 +1730,9 @@ class Isolate final : private HiddenFactory {
   base::RandomNumberGenerator* random_number_generator_ = nullptr;
   base::RandomNumberGenerator* fuzzer_rng_ = nullptr;
   base::AtomicValue<RAILMode> rail_mode_;
+public:
+  bool parsing_internal = false;
+private:
   v8::Isolate::AtomicsWaitCallback atomics_wait_callback_ = nullptr;
   void* atomics_wait_callback_data_ = nullptr;
   PromiseHook promise_hook_ = nullptr;

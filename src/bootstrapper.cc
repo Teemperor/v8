@@ -5607,7 +5607,9 @@ bool Genesis::InstallExtension(Isolate* isolate,
     }
   }
   // We do not expect this to throw an exception. Change this if it does.
+  isolate->parsing_internal = true;
   bool result = CompileExtension(isolate, extension);
+  isolate->parsing_internal = false;
   DCHECK(isolate->has_pending_exception() != result);
   if (!result) {
     // We print out the name of the extension that fail to install.
