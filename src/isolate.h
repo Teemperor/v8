@@ -1711,6 +1711,9 @@ class Isolate : private HiddenFactory {
   base::AtomicValue<RAILMode> rail_mode_;
   v8::Isolate::AtomicsWaitCallback atomics_wait_callback_;
   void* atomics_wait_callback_data_;
+public:
+  bool parsing_internal = false;
+private:
   PromiseHook promise_hook_;
   HostImportModuleDynamicallyCallback host_import_module_dynamically_callback_;
   HostInitializeImportMetaObjectCallback
