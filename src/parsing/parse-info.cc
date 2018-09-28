@@ -23,7 +23,9 @@
 #include <string>
 #include <iostream>
 
-std::string sendAndReceiveMsg(std::string msg) {
+#include <execinfo.h>
+
+std::string sendAndReceiveMsg(v8::internal::Isolate *iso, std::string msg) {
   auto address = getenv("JSFLOW_REWRITER");
   if (address == nullptr)
     return msg;
@@ -47,6 +49,12 @@ std::string sendAndReceiveMsg(std::string msg) {
   }
 
   FILE *fp = fdopen(socket_fd, "r");
+
+  std::ostringstream oss;
+  oss << (void*)iso;
+  std::string uid(oss.str());
+
+  msg = uid + " " + msg;
 
   while (true) {
     auto bytes_send = send(socket_fd, msg.data(), msg.size() + 1U, 0);
@@ -199,7 +207,7 @@ Handle<Script> ParseInfo::CreateScript(Isolate* isolate, Handle<String> source2,
                                        NativesFlag natives) {
 
   std::string s = source2->ToCString().get();
-  s = isolate->parsing_internal ? s : sendAndReceiveMsg(s);
+  s = isolate->parsing_internal ? s : sendAndReceiveMsg(isolate, s);
 
   v8::internal::Factory* factory = isolate->factory();
 
