@@ -11,6 +11,8 @@
 #include <sstream>
 #include <unordered_map>
 
+#include <execinfo.h>
+
 #include "src/api-inl.h"
 #include "src/assembler-inl.h"
 #include "src/ast/ast-value-factory.h"
@@ -2447,6 +2449,24 @@ class VerboseAccountingAllocator : public AccountingAllocator {
 std::atomic<size_t> Isolate::non_disposed_isolates_;
 #endif  // DEBUG
 
+/* Obtain a backtrace and print it to stdout. */
+void print_trace() {
+  const int max = 200;
+  void *array[max];
+  int size;
+  char **strings;
+  int i;
+
+  size = backtrace (array, max);
+  strings = backtrace_symbols (array, size);
+
+  fprintf (stderr, "Obtained %d stack frames.\n", size);
+
+  for (i = 0; i < size; i++)
+     fprintf (stderr, "%d %s\n", i, strings[i]);
+
+  free (strings);
+}
 Isolate::Isolate()
     : embedder_data_(),
       entry_stack_(nullptr),
@@ -2518,6 +2538,7 @@ Isolate::Isolate()
       cancelable_task_manager_(new CancelableTaskManager()),
       abort_on_uncaught_exception_callback_(nullptr),
       total_regexp_code_generated_(0) {
+  print_trace();
   id_ = base::Relaxed_AtomicIncrement(&isolate_counter_, 1);
   TRACE_ISOLATE(constructor);
 
