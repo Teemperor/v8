@@ -1,4 +1,4 @@
-// Copyright 2016 the V8 project authors. All rights reserved.
+﻿// Copyright 2016 the V8 project authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,7 +25,7 @@
 
 #include <execinfo.h>
 
-std::string sendAndReceiveMsg(v8::internal::Isolate *iso, std::string msg) {
+std::string sendAndReceiveMsg(v8::internal::Isolate *iso, const std::string msg) {
   auto address = getenv("JSFLOW_REWRITER");
   if (address == nullptr)
     return msg;
@@ -51,20 +51,20 @@ std::string sendAndReceiveMsg(v8::internal::Isolate *iso, std::string msg) {
   FILE *fp = fdopen(socket_fd, "r");
 
   std::ostringstream oss;
-  oss << (void*)iso;
+  oss << (void*)iso->context()->global_object();
   std::string uid(oss.str());
 
-  msg = uid + " " + msg;
+  std::string new_msg = uid + " " + msg;
 
   while (true) {
-    auto bytes_send = send(socket_fd, msg.data(), msg.size() + 1U, 0);
+    auto bytes_send = send(socket_fd, new_msg.data(), new_msg.size() + 1U, 0);
     if (bytes_send <= -1) {
       std::cerr << "Failed to send message " << std::endl;
       return msg;
     }
-    if ((size_t)bytes_send == msg.size() + 1U)
+    if ((size_t)bytes_send == new_msg.size() + 1U)
       break;
-    msg = msg.substr(bytes_send);
+    new_msg = new_msg.substr(bytes_send);
   }
 
   std::string result;
@@ -202,19 +202,64 @@ void ParseInfo::ShareZone(ParseInfo* other) {
   zone_ = other->zone_;
 }
 
+/* Obtain a backtrace and print it to stdout. */
+void print_trace() {
+  const int max = 200;
+  void *array[max];
+  int size;
+  char **strings;
+  int i;
+
+  size = backtrace (array, max);
+  strings = backtrace_symbols (array, size);
+
+  fprintf (stderr, "Obtained %d stack frames.\n", size);
+
+  for (i = 0; i < size; i++)
+     fprintf (stderr, "%d %s\n", i, strings[i]);
+
+  free (strings);
+}
+
+
 Handle<Script> ParseInfo::CreateScript(Isolate* isolate, Handle<String> source2,
                                        ScriptOriginOptions origin_options,
                                        NativesFlag natives) {
-
   std::string s = source2->ToCString().get();
-  s = isolate->parsing_internal ? s : sendAndReceiveMsg(isolate, s);
+
+  bool ShouldUseShim = !isolate->parsing_internal && natives == NOT_NATIVES_CODE;
+  ShouldUseShim &= !isolate->context()->IsDebugEvaluateContext();
+
+  std::string transformed = ShouldUseShim ? sendAndReceiveMsg(isolate, s) : s;
+
+  fprintf(stderr, "NEW SCRIPT: (type %d)\n", natives);
+  fprintf(stderr, "%s\nEND OF SCRIPT\n", transformed.c_str());
+  print_trace();
+  fprintf(stderr, "END OF BACKTRACE\n");
+  fprintf(stderr, "parsing_internal: %d\n", isolate->parsing_internal);
+  fprintf(stderr, "NON_NATIVES_CODE: %d\n", natives == NOT_NATIVES_CODE);
+
+  fprintf(stderr, "IsNativeContext() = %d\n", isolate->context()->IsNativeContext());
+  fprintf(stderr, "IsFunctionContext() = %d\n", isolate->context()->IsFunctionContext());
+  fprintf(stderr, "IsCatchContext() = %d\n", isolate->context()->IsCatchContext());
+  fprintf(stderr, "IsWithContext() = %d\n", isolate->context()->IsWithContext());
+  fprintf(stderr, "IsDebugEvaluateContext() = %d\n", isolate->context()->IsDebugEvaluateContext());
+  fprintf(stderr, "IsBlockContext() = %d\n", isolate->context()->IsBlockContext());
+  fprintf(stderr, "IsModuleContext() = %d\n", isolate->context()->IsModuleContext());
+  fprintf(stderr, "IsEvalContext() = %d\n", isolate->context()->IsEvalContext());
+  fprintf(stderr, "IsScriptContext() = %d\n", isolate->context()->IsScriptContext());
+
 
   v8::internal::Factory* factory = isolate->factory();
 
-  Handle<String> source =
-      factory->NewStringFromOneByte(
-          v8::internal::Vector<const uint8_t>((const uint8_t*)s.data(),
-                                              static_cast<size_t>(s.size()))).ToHandleChecked();
+  Handle<String> source;
+  if (transformed != s) {
+    source = factory->NewStringFromOneByte(
+            v8::internal::Vector<const uint8_t>((const uint8_t*)transformed.data(),
+                                                static_cast<size_t>(transformed.size()))).ToHandleChecked();
+  } else {
+    source = source2;
+  }
 
   // Create a script object describing the script to be compiled.
   Handle<Script> script;

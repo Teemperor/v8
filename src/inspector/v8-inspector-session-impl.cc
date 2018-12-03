@@ -195,8 +195,19 @@ void V8InspectorSessionImpl::discardInjectedScripts() {
                               });
 }
 
+struct TempTrue {
+  bool &V;
+  TempTrue(bool &V) : V(V) {
+    V = true;
+  }
+  ~TempTrue() {
+    V = false;
+  }
+};
+
 Response V8InspectorSessionImpl::findInjectedScript(
     int contextId, InjectedScript*& injectedScript) {
+  TempTrue T(m_inspector->isolate()->GetInternalParsingRef());
   injectedScript = nullptr;
   InspectedContext* context =
       m_inspector->getContext(m_contextGroupId, contextId);
@@ -326,7 +337,9 @@ void V8InspectorSessionImpl::dispatchProtocolMessage(
   if (m_dispatcher.parseCommand(parsedMessage.get(), &callId, &method)) {
     // Pass empty string instead of the actual message to save on a conversion.
     // We're allowed to do so because fall-through is not implemented.
+    m_inspector->isolate()->GetInternalParsingRef() = true;
     m_dispatcher.dispatch(callId, method, std::move(parsedMessage), "");
+    m_inspector->isolate()->GetInternalParsingRef() = false;
   }
 }
 

@@ -8002,6 +8002,8 @@ class V8_EXPORT Isolate {
    */
   bool IsExecutionTerminating();
 
+  bool &GetInternalParsingRef();
+
   /**
    * Resume execution capability in the given isolate, whose execution
    * was previously forcefully terminated using TerminateExecution().

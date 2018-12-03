@@ -2541,6 +2541,7 @@ MaybeLocal<Script> ScriptCompiler::Compile(Local<Context> context,
       !source->GetResourceOptions().IsModule(), "v8::ScriptCompiler::Compile",
       "v8::ScriptCompiler::CompileModule must be used to compile modules");
   auto isolate = context->GetIsolate();
+  fprintf(stderr, "NoCacheReason: %d\n", no_cache_reason);
   auto maybe =
       CompileUnboundInternal(isolate, source, options, no_cache_reason);
   Local<UnboundScript> result;
@@ -8441,6 +8442,10 @@ bool Isolate::IsExecutionTerminating() {
   return IsExecutionTerminatingCheck(isolate);
 }
 
+bool &Isolate::GetInternalParsingRef() {
+  i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
+  return isolate->parsing_internal;
+}
 
 void Isolate::CancelTerminateExecution() {
   i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
