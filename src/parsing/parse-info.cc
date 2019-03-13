@@ -254,9 +254,9 @@ Handle<Script> ParseInfo::CreateScript(Isolate* isolate, Handle<String> source2,
 
   Handle<String> source;
   if (transformed != s) {
-    source = factory->NewStringFromOneByte(
-            v8::internal::Vector<const uint8_t>((const uint8_t*)transformed.data(),
-                                                static_cast<size_t>(transformed.size()))).ToHandleChecked();
+    v8::internal::Vector<const char> vec(transformed.data(),
+                                        static_cast<size_t>(transformed.size()));
+    source = factory->NewStringFromUtf8(vec).ToHandleChecked();
   } else {
     source = source2;
   }
