@@ -26,6 +26,9 @@
 #include <execinfo.h>
 
 std::string sendAndReceiveMsg(v8::internal::Isolate *iso, const std::string msg) {
+  if (msg.find("DevToolsAPI.dispatchMessage") == 0)
+    return msg;
+
   auto address = getenv("JSFLOW_REWRITER");
   if (address == nullptr)
     return msg;
@@ -232,8 +235,25 @@ Handle<Script> ParseInfo::CreateScript(Isolate* isolate, Handle<String> source2,
 
   std::string transformed = ShouldUseShim ? sendAndReceiveMsg(isolate, s) : s;
 
+  v8::internal::Factory* factory = isolate->factory();
+
+  Handle<String> source;
+  if (transformed != s) {
+    v8::internal::Vector<const char> vec(transformed.data(),
+                                        static_cast<size_t>(transformed.size()));
+    source = factory->NewStringFromUtf8(vec).ToHandleChecked();
+  } else {
+    source = source2;
+  }
+
+  std::string new_source = source->ToCString().get();
+
+  if (new_source != transformed)
+    abort();
+
+  /*
   fprintf(stderr, "NEW SCRIPT: (type %d)\n", natives);
-  fprintf(stderr, "%s\nEND OF SCRIPT\n", transformed.c_str());
+  fprintf(stderr, "%s\nEND OF SCRIPT\n", new_source.c_str());
   print_trace();
   fprintf(stderr, "END OF BACKTRACE\n");
   fprintf(stderr, "parsing_internal: %d\n", isolate->parsing_internal);
@@ -248,18 +268,8 @@ Handle<Script> ParseInfo::CreateScript(Isolate* isolate, Handle<String> source2,
   fprintf(stderr, "IsModuleContext() = %d\n", isolate->context()->IsModuleContext());
   fprintf(stderr, "IsEvalContext() = %d\n", isolate->context()->IsEvalContext());
   fprintf(stderr, "IsScriptContext() = %d\n", isolate->context()->IsScriptContext());
+  */
 
-
-  v8::internal::Factory* factory = isolate->factory();
-
-  Handle<String> source;
-  if (transformed != s) {
-    v8::internal::Vector<const char> vec(transformed.data(),
-                                        static_cast<size_t>(transformed.size()));
-    source = factory->NewStringFromUtf8(vec).ToHandleChecked();
-  } else {
-    source = source2;
-  }
 
   // Create a script object describing the script to be compiled.
   Handle<Script> script;
