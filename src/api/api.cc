@@ -125,6 +125,105 @@
 #endif  // V8_TARGET_ARCH_X64
 #endif  // V8_OS_WIN
 
+#include <cstdio>
+#include <cstdlib>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/un.h>
+
+#include <fstream>
+#include <string>
+#include <iostream>
+
+#if PRINT_BT
+#include <execinfo.h>
+/* Obtain a backtrace and print it to stdout. */
+static void printTrace() {
+  const int max = 200;
+  void *array[max];
+  int size;
+  char **strings;
+  int i;
+
+  size = backtrace (array, max);
+  strings = backtrace_symbols (array, size);
+
+  fprintf (stderr, "Obtained %d stack frames.\n", size);
+
+  for (i = 0; i < size; i++)
+     fprintf (stderr, "%d %s\n", i, strings[i]);
+
+  free (strings);
+}
+#endif
+
+static std::string sendAndReceiveMsg(v8::internal::Isolate *iso, const std::string msg) {
+  if (msg.find("DevToolsAPI.") == 0)
+    return msg;
+
+  auto address = getenv("JSFLOW_REWRITER");
+  if (address == nullptr)
+    return msg;
+
+  sockaddr_un server_sock = {};
+
+  int socket_fd = socket(PF_UNIX, SOCK_STREAM, 0);
+  if (socket_fd < 0) {
+    perror("client: socket");
+    return msg;
+  }
+
+  server_sock.sun_family = PF_UNIX;
+  strcpy(server_sock.sun_path, address);
+
+  socklen_t len = (socklen_t)(sizeof(server_sock.sun_family) + strlen(server_sock.sun_path));
+
+  if (connect(socket_fd, reinterpret_cast<sockaddr*>(&server_sock), len) < 0) {
+    close(socket_fd);
+    return msg;
+  }
+
+  FILE *fp = fdopen(socket_fd, "r");
+
+  std::ostringstream oss;
+  oss << (void*)iso->context()->global_object().address();
+  std::string uid(oss.str());
+
+  std::string new_msg = uid + " " + msg;
+
+  while (true) {
+    auto bytes_send = send(socket_fd, new_msg.data(), new_msg.size() + 1U, 0);
+    if (bytes_send <= -1) {
+      std::cerr << "Failed to send message " << std::endl;
+      return msg;
+    }
+    if ((size_t)bytes_send == new_msg.size() + 1U)
+      break;
+    new_msg = new_msg.substr(bytes_send);
+  }
+
+  std::string result;
+  int c;
+  while ((c = fgetc(fp)) != EOF) {
+    if (c == '\0')
+      break;
+    result.push_back((char)c);
+  }
+
+  close(socket_fd);
+
+  if (result.find("Fingerprintjs2 1.8.0") != std::string::npos) {
+    std::hash<std::string> hasher;
+    size_t hash = hasher(result);
+    std::cerr << "HASH: " << hash << std::endl;
+    std::cerr << "FINGERPRINT\n";
+  }
+
+  return result;
+}
+
+
 namespace v8 {
 
 /*
@@ -2341,13 +2440,33 @@ i::Compiler::ScriptDetails GetScriptDetails(
 }  // namespace
 
 MaybeLocal<UnboundScript> ScriptCompiler::CompileUnboundInternal(
-    Isolate* v8_isolate, Source* source, CompileOptions options,
+    Isolate* v8_isolate, Source* source2, CompileOptions options,
     NoCacheReason no_cache_reason) {
   auto isolate = reinterpret_cast<i::Isolate*>(v8_isolate);
   TRACE_EVENT_CALL_STATS_SCOPED(isolate, "v8", "V8.ScriptCompiler");
   ENTER_V8_NO_SCRIPT(isolate, v8_isolate->GetCurrentContext(), ScriptCompiler,
                      CompileUnbound, MaybeLocal<UnboundScript>(),
                      InternalEscapableScope);
+
+
+  bool ShouldUseShim = !isolate->context()->IsDebugEvaluateContext();
+
+  Source* source = nullptr;
+  if (ShouldUseShim) {
+    auto &orig_source = source2->source_string;
+    std::vector<char> buffer;
+    buffer.resize(orig_source->Utf8Length(v8_isolate));
+    int written = orig_source->WriteUtf8(v8_isolate, buffer.data(), (int)buffer.size());
+    (void)written;
+    assert(written == (int)buffer.size());
+
+    std::string buffer_str(buffer.begin(), buffer.end());
+    std::string transformed = sendAndReceiveMsg(isolate, buffer_str);
+    Local<String> sourcestr = v8::String::NewFromUtf8(v8_isolate, transformed.c_str(), NewStringType::kNormal, (int)transformed.size()).ToLocalChecked();
+    source = new Source(sourcestr);
+  } else {
+    source = source2;
+  }
 
   i::ScriptData* script_data = nullptr;
   if (options == kConsumeCodeCache) {
