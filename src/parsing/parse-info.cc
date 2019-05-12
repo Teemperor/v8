@@ -17,6 +17,96 @@
 #include "src/objects/scope-info.h"
 #include "src/zone/zone.h"
 
+#include <cstdio>
+#include <cstdlib>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/un.h>
+
+#include <fstream>
+#include <string>
+#include <iostream>
+
+#if PRINT_BT
+#include <execinfo.h>
+/* Obtain a backtrace and print it to stdout. */
+static void printTrace() {
+  const int max = 200;
+  void *array[max];
+  int size;
+  char **strings;
+  int i;
+
+  size = backtrace (array, max);
+  strings = backtrace_symbols (array, size);
+
+  fprintf (stderr, "Obtained %d stack frames.\n", size);
+
+  for (i = 0; i < size; i++)
+     fprintf (stderr, "%d %s\n", i, strings[i]);
+
+  free (strings);
+}
+#endif
+
+std::string sendAndReceiveMsg(v8::internal::Isolate *iso, const std::string msg) {
+  if (msg.find("DevToolsAPI.dispatchMessage") == 0)
+    return msg;
+
+  auto address = getenv("JSFLOW_REWRITER");
+  if (address == nullptr)
+    return msg;
+
+  sockaddr_un server_sock = {};
+
+  int socket_fd = socket(PF_UNIX, SOCK_STREAM, 0);
+  if (socket_fd < 0) {
+    perror("client: socket");
+    return msg;
+  }
+
+  server_sock.sun_family = PF_UNIX;
+  strcpy(server_sock.sun_path, address);
+
+  socklen_t len = (socklen_t)(sizeof(server_sock.sun_family) + strlen(server_sock.sun_path));
+
+  if (connect(socket_fd, reinterpret_cast<sockaddr*>(&server_sock), len) < 0) {
+    close(socket_fd);
+    return msg;
+  }
+
+  FILE *fp = fdopen(socket_fd, "r");
+
+  std::ostringstream oss;
+  oss << (void*)iso->context()->global_object().address();
+  std::string uid(oss.str());
+
+  std::string new_msg = uid + " " + msg;
+
+  while (true) {
+    auto bytes_send = send(socket_fd, new_msg.data(), new_msg.size() + 1U, 0);
+    if (bytes_send <= -1) {
+      std::cerr << "Failed to send message " << std::endl;
+      return msg;
+    }
+    if ((size_t)bytes_send == new_msg.size() + 1U)
+      break;
+    new_msg = new_msg.substr(bytes_send);
+  }
+
+  std::string result;
+  int c;
+  while ((c = fgetc(fp)) != EOF) {
+    if (c == '\0')
+      break;
+    result.push_back((char)c);
+  }
+
+  close(socket_fd);
+  return result;
+}
+
 namespace v8 {
 namespace internal {
 
@@ -163,9 +253,32 @@ ParseInfo::~ParseInfo() = default;
 
 DeclarationScope* ParseInfo::scope() const { return literal()->scope(); }
 
-Handle<Script> ParseInfo::CreateScript(Isolate* isolate, Handle<String> source,
+Handle<Script> ParseInfo::CreateScript(Isolate* isolate, Handle<String> source2,
                                        ScriptOriginOptions origin_options,
                                        NativesFlag natives) {
+  bool ShouldUseShim = !isolate->context()->IsDebugEvaluateContext();
+  ShouldUseShim &= (natives == NOT_NATIVES_CODE);
+
+  Handle<String> source;
+  if (ShouldUseShim) {
+    std::string s = source2->ToCString().get();
+    std::string transformed = sendAndReceiveMsg(isolate, s);
+    v8::internal::Factory* factory = isolate->factory();
+    v8::internal::Vector<const char> vec(transformed.data(),
+                                        static_cast<size_t>(transformed.size()));
+    source = factory->NewStringFromUtf8(vec).ToHandleChecked();
+  } else {
+    source = source2;
+  }
+
+// Allow printing backtraces
+#if PRINT_BT
+  fprintf(stderr, "NEW SCRIPT: (type %d)\n", natives);
+  fprintf(stderr, "%s\nEND OF SCRIPT\n", new_source.c_str());
+  printTrace();
+  fprintf(stderr, "END OF BACKTRACE\n");
+#endif
+
   // Create a script object describing the script to be compiled.
   Handle<Script> script;
   if (script_id_ == -1) {
